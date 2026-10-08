@@ -90,6 +90,7 @@ section "Disk usage (warning above ${DISK_WARN}%)"
 # -P gives one line per filesystem, so the columns are predictable.
 while read -r filesystem size used avail pct mount; do
   usage="${pct%\%}"
+  [[ "$usage" =~ ^[0-9]+$ ]] || continue   # skip special filesystems with no percentage
   printf '  %-25s %6s used of %6s (%s)\n' "$mount" "$used" "$size" "$pct"
   if (( usage >= DISK_WARN )); then
     warn "$mount is ${pct} full (filesystem $filesystem, $avail free)"
@@ -97,10 +98,12 @@ while read -r filesystem size used avail pct mount; do
 done < <(df -hP | awk 'NR > 1 && $1 !~ /^(tmpfs|devfs|devtmpfs|overlay|map|none)/')
 
 section "Top 5 processes by CPU"
+# awk reads all of ps's output; `head` would stop early and the resulting
+# SIGPIPE counts as a failure under `set -o pipefail`.
 if [[ "$OS" == "Darwin" ]]; then
-  ps -Ao pid,pcpu,pmem,comm -r | head -6 | sed 's/^/  /'
+  ps -Ao pid,pcpu,pmem,comm -r | awk 'NR <= 6 { print "  " $0 }'
 else
-  ps -eo pid,pcpu,pmem,comm --sort=-pcpu | head -6 | sed 's/^/  /'
+  ps -eo pid,pcpu,pmem,comm --sort=-pcpu | awk 'NR <= 6 { print "  " $0 }'
 fi
 
 section "Summary"
