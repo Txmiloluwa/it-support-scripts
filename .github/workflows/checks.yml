@@ -1,0 +1,78 @@
+name: Checks
+
+# Lint and smoke-test every script on every push, on Linux, macOS and Windows.
+on:
+  push:
+  pull_request:
+
+jobs:
+  bash:
+    name: Bash (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint with ShellCheck
+        if: runner.os == 'Linux'
+        run: shellcheck bash/*.sh
+
+      - name: System health report
+        run: bash bash/system_health.sh
+
+      - name: Bulk user creation (dry run)
+        run: |
+          output="$(bash bash/bulk_create_users.sh examples/new_starters.csv)"
+          echo "$output"
+          echo "$output" | grep -q "would create ade.okafor"
+          echo "$output" | grep -q "SKIPPED 'BadName' (invalid username)"
+
+      - name: Bulk user creation (real, Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo bash bash/bulk_create_users.sh examples/new_starters.csv --apply | sed -E 's/(password: ).*/\1********/'
+          id ade.okafor
+          sudo chage -l ade.okafor | grep -q "password must be changed"
+
+      - name: Disk clean-up (dry run, then delete)
+        run: |
+          mkdir -p /tmp/cleanup-test
+          touch -t 202001010000 /tmp/cleanup-test/old.tmp /tmp/cleanup-test/old.log
+          touch /tmp/cleanup-test/new.tmp
+          bash bash/disk_cleanup.sh /tmp/cleanup-test
+          test -f /tmp/cleanup-test/old.tmp   # dry run must not delete anything
+          echo YES | bash bash/disk_cleanup.sh /tmp/cleanup-test --delete
+          test ! -f /tmp/cleanup-test/old.tmp
+          test -f /tmp/cleanup-test/new.tmp   # recent files are kept
+
+      - name: Network check
+        run: bash bash/network_check.sh || echo "Some checks failed (CI runners often block ping)"
+
+  powershell:
+    name: PowerShell (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint with PSScriptAnalyzer
+        run: |
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          }
+          $issues = Invoke-ScriptAnalyzer -Path powershell
+          $issues | Format-Table -AutoSize
+          if ($issues) { exit 1 }
+
+      - name: System health report
+        run: .\powershell\Get-SystemHealth.ps1
+
+      - name: Bulk user creation (WhatIf, no changes)
+        run: .\powershell\New-BulkLocalUsers.ps1 -CsvPath examples\new_starters.csv -WhatIf
